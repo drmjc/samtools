@@ -33,6 +33,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include <unistd.h>
 #include "htslib/sam.h"
 #include "samtools.h"
@@ -125,7 +126,7 @@ int main_depth(int argc, char *argv[])
     else
         n = argc - optind; // the number of BAMs on the command line
     data = calloc(n, sizeof(aux_t*)); // data[i] for the i-th input
-    beg = 0; end = 1<<30;  // set the default region
+    beg = 0; end = INT_MAX;  // set the default region
     for (i = 0; i < n; ++i) {
         data[i] = calloc(1, sizeof(aux_t));
         data[i]->fp = sam_open(argv[optind+i], "r"); // open BAM
@@ -147,6 +148,12 @@ int main_depth(int argc, char *argv[])
         data[i]->min_mapQ = mapQ;                    // set the mapQ filter
         data[i]->min_len  = min_len;                 // set the qlen filter
         data[i]->hdr = sam_hdr_read(data[i]->fp);    // read the BAM header
+        if (data[i]->hdr == NULL) {
+            fprintf(stderr, "Couldn't read header for \"%s\"\n",
+                    argv[optind+i]);
+            status = EXIT_FAILURE;
+            goto depth_end;
+        }
         if (reg) { // if a region is specified
             hts_idx_t *idx = sam_index_load(data[i]->fp, argv[optind+i]);  // load the index
             if (idx == NULL) {

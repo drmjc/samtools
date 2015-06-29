@@ -46,9 +46,15 @@ int bam_reheader(BGZF *in, bam_hdr_t *h, int fd,
     BGZF *fp;
     ssize_t len;
     uint8_t *buf;
+    bam_hdr_t *old;
     if (in->is_write) return -1;
     buf = malloc(BUF_SIZE);
-    (void)bam_hdr_read(in);
+    old = bam_hdr_read(in);
+    if (old == NULL) {
+        fprintf(stderr, "Couldn't read header\n");
+        free(buf);
+        return -1;
+    }
     fp = bgzf_fdopen(fd, "w");
 
     if (add_PG) {
@@ -444,6 +450,11 @@ int main_reheader(int argc, char *argv[])
         }
         h = sam_hdr_read(fph);
         sam_close(fph);
+        if (h == NULL) {
+            fprintf(stderr, "[%s] failed to read the header for '%s'.\n",
+                    __func__, argv[1]);
+            return 1;
+        }
     }
     in = sam_open(argv[optind+1], inplace?"r+":"r");
     if (in == 0) {
