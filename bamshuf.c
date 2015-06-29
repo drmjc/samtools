@@ -92,6 +92,10 @@ static int bamshuf(const char *fn, int n_files, const char *pre, int clevel,
     }
 
     h = sam_hdr_read(fp);
+    if (h == NULL) {
+        fprintf(stderr, "Couldn't read header for '%s'\n", fn);
+        return 1;
+    }
     fnt = (char**)calloc(n_files, sizeof(char*));
     fpt = (samFile**)calloc(n_files, sizeof(samFile*));
     cnt = (int64_t*)calloc(n_files, 8);

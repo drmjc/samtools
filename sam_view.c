@@ -141,7 +141,7 @@ static char *drop_rg(char *hdtxt, rghash_t h, int *len)
     return str.s;
 }
 
-static int usage(int is_long_help);
+static int usage(FILE *fp, int exit_status, int is_long_help);
 
 static int add_read_group_single(samview_settings_t *settings, char *name)
 {
@@ -233,7 +233,7 @@ int main_samview(int argc, char *argv[])
     int64_t count = 0;
     samFile *in = 0, *out = 0, *un_out=0;
     bam_hdr_t *header = NULL;
-    char out_mode[5], *out_format = "", *fn_out = 0, *fn_list = 0, *q, *fn_un_out = 0;
+    char out_mode[5], *out_format = "", *fn_out = 0, *fn_in = 0, *fn_list = 0, *q, *fn_un_out = 0;
     sam_global_args ga = SAM_GLOBAL_ARGS_INIT;
 
     samview_settings_t settings = {
@@ -306,14 +306,13 @@ int main_samview(int argc, char *argv[])
         //case 'X': out_format = "X"; break;
                  */
         case '?': is_long_help = 1; break;
-            //case 'T': fn_ref = strdup(optarg); break;
         case 'B': settings.remove_B = 1; break;
         case '@': n_threads = strtol(optarg, 0, 0); break;
         case 'x':
             {
                 if (strlen(optarg) != 2) {
                     fprintf(stderr, "main_samview: Error parsing -x auxiliary tags should be exactly two characters long.\n");
-                    return usage(is_long_help);
+                    return usage(stderr, EXIT_FAILURE, is_long_help);
                 }
                 settings.remove_aux = (char**)realloc(settings.remove_aux, sizeof(char*) * (++settings.remove_aux_len));
                 settings.remove_aux[settings.remove_aux_len-1] = optarg;
@@ -322,7 +321,7 @@ int main_samview(int argc, char *argv[])
 
         default:
 	    if (parse_sam_global_opt(c, optarg, lopts, &ga) != 0)
-                return usage(is_long_help);
+                return usage(stderr, EXIT_FAILURE, is_long_help);
         }
     }
     if (compress_level >= 0 && !*out_format) out_format = "b";
@@ -333,13 +332,14 @@ int main_samview(int argc, char *argv[])
         tmp[0] = compress_level + '0'; tmp[1] = '\0';
         strcat(out_mode, tmp);
     }
-    if (argc == optind) return usage(is_long_help); // potential memory leak...
+    if (argc == optind && isatty(STDIN_FILENO)) return usage(stdout, EXIT_SUCCESS, is_long_help); // potential memory leak...
 
+    fn_in = (optind < argc)? argv[optind] : "-";
     // generate the fn_list if necessary
     if (fn_list == 0 && ga.reference) fn_list = samfaipath(ga.reference);
     // open file handlers
-    if ((in = sam_open_format(argv[optind], "r", &ga.in)) == 0) {
-        print_error_errno("failed to open \"%s\" for reading", argv[optind]);
+    if ((in = sam_open_format(fn_in, "r", &ga.in)) == 0) {
+        print_error_errno("failed to open \"%s\" for reading", fn_in);
         ret = 1;
         goto view_end;
     }
@@ -352,7 +352,7 @@ int main_samview(int argc, char *argv[])
         }
     }
     if ((header = sam_hdr_read(in)) == 0) {
-        fprintf(stderr, "[main_samview] fail to read the header from \"%s\".\n", argv[optind]);
+        fprintf(stderr, "[main_samview] fail to read the header from \"%s\".\n", fn_in);
         ret = 1;
         goto view_end;
     }
@@ -404,7 +404,7 @@ int main_samview(int argc, char *argv[])
     if (n_threads > 1) { if (out) hts_set_threads(out, n_threads); }
     if (is_header_only) goto view_end; // no need to print alignments
 
-    if (argc == optind + 1) { // convert/print the entire file
+    if (optind + 1 >= argc) { // convert/print the entire file
         bam1_t *b = bam_init1();
         int r;
         while ((r = sam_read1(in, header, b)) >= 0) { // read one alignment from `in'
@@ -423,7 +423,7 @@ int main_samview(int argc, char *argv[])
     } else { // retrieve alignments in specified regions
         int i;
         bam1_t *b;
-        hts_idx_t *idx = sam_index_load(in, argv[optind]); // load index
+        hts_idx_t *idx = sam_index_load(in, fn_in); // load index
         if (idx == 0) { // index is unavailable
             fprintf(stderr, "[main_samview] random alignment retrieval only works for indexed BAM or CRAM files.\n");
             ret = 1;
@@ -466,7 +466,7 @@ view_end:
         printf("%" PRId64 "\n", count);
 
     // close files, free and return
-    if (in) check_sam_close(in, argv[optind], "standard input", &ret);
+    if (in) check_sam_close(in, fn_in, "standard input", &ret);
     if (out) check_sam_close(out, fn_out, "standard output", &ret);
     if (un_out) check_sam_close(un_out, fn_un_out, "file", &ret);
 
@@ -486,81 +486,84 @@ view_end:
     return ret;
 }
 
-static int usage(int is_long_help)
+static int usage(FILE *fp, int exit_status, int is_long_help)
 {
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Usage:   samtools view [options] <in.bam>|<in.sam>|<in.cram> [region ...]\n\n");
-    // output options
-    fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  -b           output BAM\n");
-    fprintf(stderr, "  -C           output CRAM (requires -T)\n");
-    fprintf(stderr, "  -1           use fast BAM compression (implies -b)\n");
-    fprintf(stderr, "  -u           uncompressed BAM output (implies -b)\n");
-    fprintf(stderr, "  -h           include header in SAM output\n");
-    fprintf(stderr, "  -H           print SAM header only (no alignments)\n");
-    fprintf(stderr, "  -c           print only the count of matching records\n");
-    fprintf(stderr, "  -o FILE      output file name [stdout]\n");
-    fprintf(stderr, "  -U FILE      output reads not selected by filters to FILE [null]\n");
-    // extra input                  
-    fprintf(stderr, "  -t FILE      FILE listing reference names and lengths (see long help) [null]\n");
-    // read filters                 
-    fprintf(stderr, "  -L FILE      only include reads overlapping this BED FILE [null]\n");
-    fprintf(stderr, "  -r STR       only include reads in read group STR [null]\n");
-    fprintf(stderr, "  -R FILE      only include reads with read group listed in FILE [null]\n");
-    fprintf(stderr, "  -q INT       only include reads with mapping quality >= INT [0]\n");
-    fprintf(stderr, "  -l STR       only include reads in library STR [null]\n");
-    fprintf(stderr, "  -m INT       only include reads with number of CIGAR operations\n");
-    fprintf(stderr, "               consuming query sequence >= INT [0]\n");
-    fprintf(stderr, "  -f INT       only include reads with all bits set in INT set in FLAG [0]\n");
-    fprintf(stderr, "  -F INT       only include reads with none of the bits set in INT\n");
-    fprintf(stderr, "               set in FLAG [0]\n");
-    // read processing              
-    fprintf(stderr, "  -x STR       read tag to strip (repeatable) [null]\n");
-    fprintf(stderr, "  -B           collapse the backward CIGAR operation\n");
-    fprintf(stderr, "  -s FLOAT     integer part sets seed of random number generator [0];\n");
-    fprintf(stderr, "               rest sets fraction of templates to subsample [no subsampling]\n");
-    // general options              
-    fprintf(stderr, "  -@ INT       number of BAM compression threads [0]\n");
-    fprintf(stderr, "  -?           print long help, including note about region specification\n");
-    fprintf(stderr, "  -S           ignored (input format is auto-detected)\n");
-    fprintf(stderr, "\n");
+    fprintf(fp,
+"\n"
+"Usage: samtools view [options] <in.bam>|<in.sam>|<in.cram> [region ...]\n"
+"\n"
+"Options:\n"
+// output options
+"  -b           output BAM\n"
+"  -C           output CRAM (requires -T)\n"
+"  -1           use fast BAM compression (implies -b)\n"
+"  -u           uncompressed BAM output (implies -b)\n"
+"  -h           include header in SAM output\n"
+"  -H           print SAM header only (no alignments)\n"
+"  -c           print only the count of matching records\n"
+"  -o FILE      output file name [stdout]\n"
+"  -U FILE      output reads not selected by filters to FILE [null]\n"
+// extra input
+"  -t FILE      FILE listing reference names and lengths (see long help) [null]\n"
+// read filters
+"  -L FILE      only include reads overlapping this BED FILE [null]\n"
+"  -r STR       only include reads in read group STR [null]\n"
+"  -R FILE      only include reads with read group listed in FILE [null]\n"
+"  -q INT       only include reads with mapping quality >= INT [0]\n"
+"  -l STR       only include reads in library STR [null]\n"
+"  -m INT       only include reads with number of CIGAR operations\n"
+"               consuming query sequence >= INT [0]\n"
+"  -f INT       only include reads with all bits set in INT set in FLAG [0]\n"
+"  -F INT       only include reads with none of the bits set in INT\n"
+"               set in FLAG [0]\n"
+// read processing
+"  -x STR       read tag to strip (repeatable) [null]\n"
+"  -B           collapse the backward CIGAR operation\n"
+"  -s FLOAT     integer part sets seed of random number generator [0];\n"
+"               rest sets fraction of templates to subsample [no subsampling]\n"
+// general options
+"  -@ INT       number of BAM compression threads [0]\n"
+"  -?           print long help, including note about region specification\n"
+"  -S           ignored (input format is auto-detected)\n"
+"\n");
 
-    sam_global_opt_help(stderr, "-.O.T");
+    sam_global_opt_help(fp, "-.O.T");
 
     if (is_long_help)
-        fprintf(stderr, "Notes:\n\
-\n\
-  1. This command now auto-detects the input format (BAM/CRAM/SAM).\n\
-     Further control over the CRAM format can be specified by using the\n\
-     --output-fmt-option, e.g. to specify the number of sequences per slice\n\
-     and to use avoid reference based compression:\n\
-     `samtools view -C --output-fmt-option seqs_per_slice=5000 \\\n\
-         --output-fmt-option no_ref -o out.cram in.bam'\n\
-\n\
-     Options can also be specified as a comma separated list within the\n\
-     --output-fmt value too.  For example this is equivalent to the above\n\
-     `samtools view --output-fmt cram,seqs_per_slice=5000,no_ref \\\n\
-         -o out.cram in.bam'\n\
-\n\
-  2. The file supplied with `-t' is SPACE/TAB delimited with the first\n\
-     two fields of each line consisting of the reference name and the\n\
-     corresponding sequence length. The `.fai' file generated by \n\
-     `samtools faidx' is suitable for use as this file. This may be an\n\
-     empty file if reads are unaligned.\n\
-\n\
-  3. SAM->BAM conversion: `samtools view -bT ref.fa in.sam.gz'.\n\
-\n\
-  4. BAM->SAM conversion: `samtools view -h in.bam'.\n\
-\n\
-  5. A region should be presented in one of the following formats:\n\
-     `chr1', `chr2:1,000' and `chr3:1000-2,000'. When a region is\n\
-     specified, the input alignment file must be a sorted and indexed\n\
-     alignment (BAM/CRAM) file.\n\
-\n\
-  6. Option `-u' is preferred over `-b' when the output is piped to\n\
-     another samtools command.\n\
-\n");
-    return 1;
+        fprintf(fp,
+"Notes:\n"
+"\n"
+"  1. This command now auto-detects the input format (BAM/CRAM/SAM).\n"
+"     Further control over the CRAM format can be specified by using the\n"
+"     --output-fmt-option, e.g. to specify the number of sequences per slice\n"
+"     and to use avoid reference based compression:\n"
+"     `samtools view -C --output-fmt-option seqs_per_slice=5000 \\\n"
+"         --output-fmt-option no_ref -o out.cram in.bam'\n"
+"\n"
+"     Options can also be specified as a comma separated list within the\n"
+"     --output-fmt value too.  For example this is equivalent to the above\n"
+"     `samtools view --output-fmt cram,seqs_per_slice=5000,no_ref \\\n"
+"         -o out.cram in.bam'\n"
+"\n"
+"  2. The file supplied with `-t' is SPACE/TAB delimited with the first\n"
+"     two fields of each line consisting of the reference name and the\n"
+"     corresponding sequence length. The `.fai' file generated by \n"
+"     `samtools faidx' is suitable for use as this file. This may be an\n"
+"     empty file if reads are unaligned.\n"
+"\n"
+"  3. SAM->BAM conversion: `samtools view -bT ref.fa in.sam.gz'.\n"
+"\n"
+"  4. BAM->SAM conversion: `samtools view -h in.bam'.\n"
+"\n"
+"  5. A region should be presented in one of the following formats:\n"
+"     `chr1', `chr2:1,000' and `chr3:1000-2,000'. When a region is\n"
+"     specified, the input alignment file must be a sorted and indexed\n"
+"     alignment (BAM/CRAM) file.\n"
+"\n"
+"  6. Option `-u' is preferred over `-b' when the output is piped to\n"
+"     another samtools command.\n"
+"\n");
+    return exit_status;
 }
 
 int main_import(int argc, char *argv[])
@@ -654,19 +657,30 @@ int main_bam2fq(int argc, char *argv[])
         fprintf(stderr, "Failed to set CRAM_OPT_DECODE_MD value\n");
         return 1;
     }
+
+    h = sam_hdr_read(fp);
+    if (h == NULL) {
+        fprintf(stderr, "Failed to read header for \"%s\"\n", argv[optind]);
+        return 1;
+    }
+    b = bam_init1();
+    if (b == NULL) {
+        perror(NULL);
+        bam_hdr_destroy(h);
+        return 1;
+    }
+    buf = NULL;
+    max_buf = 0;
+
     fpse = NULL;
     if (fnse) {
         fpse = fopen(fnse,"w");
         if (fpse == NULL) {
             print_error_errno("Cannot write to singleton file \"%s\"", fnse);
+            bam_hdr_destroy(h);
             return 1;
         }
     }
-
-    h = sam_hdr_read(fp);
-    b = bam_init1();
-    buf = NULL;
-    max_buf = 0;
 
     int64_t n_singletons = 0, n_reads = 0;
     char* previous = NULL;

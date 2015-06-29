@@ -1,7 +1,7 @@
 /*  cut_target.c -- targetcut subcommand.
 
     Copyright (C) 2011 Broad Institute.
-    Copyright (C) 2012-2013 Genome Research Ltd.
+    Copyright (C) 2012-2013, 2015 Genome Research Ltd.
 
     Author: Heng Li <lh3@sanger.ac.uk>
 
@@ -48,6 +48,7 @@ typedef struct {
     samFile *fp;
     bam_header_t *h;
     char *ref;
+    int len;
     faidx_t *fai;
     errmod_t *em;
 } ct_t;
@@ -143,9 +144,9 @@ static void process_cns(bam_header_t *h, int tid, int l, uint16_t *cns)
 
 static int read_aln(void *data, bam1_t *b)
 {
-    extern int bam_prob_realn_core(bam1_t *b, const char *ref, int flag);
+    extern int bam_prob_realn_core(bam1_t *b, const char *ref, int ref_len, int flag);
     ct_t *g = (ct_t*)data;
-    int ret, len;
+    int ret;
     while (1)
     {
         ret = sam_read1(g->fp, g->h, b);
@@ -154,10 +155,10 @@ static int read_aln(void *data, bam1_t *b)
         if ( g->fai && b->core.tid >= 0 ) {
             if (b->core.tid != g->tid) { // then load the sequence
                 free(g->ref);
-                g->ref = fai_fetch(g->fai, g->h->target_name[b->core.tid], &len);
+                g->ref = fai_fetch(g->fai, g->h->target_name[b->core.tid], &g->len);
                 g->tid = b->core.tid;
             }
-            bam_prob_realn_core(b, g->ref, 1<<1|1);
+            bam_prob_realn_core(b, g->ref, g->len, 1<<1|1);
         }
         break;
     }
@@ -197,9 +198,13 @@ int main_cut_target(int argc, char *argv[])
         return 1;
     }
     l = max_l = 0; cns = 0;
-    //g.fp = strcmp(argv[optind], "-")? bam_open(argv[optind], "r") : bam_dopen(fileno(stdin), "r");
     g.fp = sam_open_format(argv[optind], "r", &ga.in);
     g.h = sam_header_read(g.fp);
+    if (g.h == NULL) {
+        fprintf(stderr, "Couldn't read header for '%s'\n", argv[optind]);
+        bam_close(g.fp);
+        return 1;
+    }
     g.em = errmod_init(1. - ERR_DEP);
     plp = bam_plp_init(read_aln, &g);
     while ((p = bam_plp_auto(plp, &tid, &pos, &n)) != 0) {

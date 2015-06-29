@@ -440,6 +440,7 @@ sub test_index
     cmd("$$opts{bin}/samtools index -c $$opts{tmp}/large_chrom.bam");
     test_cmd($opts,out=>'dat/large_chrom.out',cmd=>"$$opts{bin}/samtools view $$opts{tmp}/large_chrom.bam ref2");
     test_cmd($opts,out=>'dat/large_chrom.out',cmd=>"$$opts{bin}/samtools view $$opts{tmp}/large_chrom.bam ref2:1-541556283");
+    test_cmd($opts,out=>'dat/test_input_1_a.bam.bai.expected',cmd=>"$$opts{bin}/samtools index $$opts{path}/dat/test_input_1_a.bam && cat $$opts{path}/dat/test_input_1_a.bam.bai");
 }
 
 sub test_mpileup
@@ -2169,8 +2170,7 @@ sub test_depad
                                              $out, $test, $format->[1]),
                               ref_path => "$$opts{path}/dat/cram_md5",
                               redirect => 1,
-                              $compare => $unpad_sam,
-                              expect_fail => 1);
+                              $compare => $unpad_sam);
             }
         }
     }
@@ -2209,6 +2209,8 @@ sub test_merge
     test_cmd($opts,out=>'merge/3.merge.expected.bam', err=>'merge/3.merge.expected.err',cmd=>"$$opts{bin}/samtools merge -s 1 -b $tmpfile_filename - $$opts{path}/dat/test_input_1_a.bam");
     # Merge 4 - 1 file BAM merge with file presented on the command line
     test_cmd($opts,out=>'merge/4.merge.expected.bam',cmd=>"$$opts{bin}/samtools merge -s 1 - $$opts{path}/dat/test_input_1_b.bam");
+    # Merge 5 - 3 file SAM merge all presented on the command line override IDs to file names
+    test_cmd($opts,out=>'merge/5.merge.expected.bam',cmd=>"$$opts{bin}/samtools merge -r -s 1 - $$opts{path}/dat/test_input_1_a.sam $$opts{path}/dat/test_input_1_b.sam $$opts{path}/dat/test_input_1_c.sam");
 }
 
 sub test_fixmate
